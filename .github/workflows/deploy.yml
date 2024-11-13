@@ -30,114 +30,74 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      # Set up Terraform
-      - name: Set up Terraform
-        uses: hashicorp/setup-terraform@v2
-        with:
-          terraform_version: 1.3.0
+#from here to vm deploy steps--------------------------
+      # # Set up Terraform
+      # - name: Set up Terraform
+      #   uses: hashicorp/setup-terraform@v2
+      #   with:
+      #     terraform_version: 1.3.0
 
-      # Initialize Terraform
-      - name: Initialize Terraform
-        run: terraform init
-        working-directory: terraform
-
-       # Terraform Plan
-      - name: Terraform Plan
-        run: terraform plan -out=tfplan
-        working-directory: terraform
-
-      # Terraform Apply
-      - name: Terraform Apply
-        if: github.ref == 'refs/heads/main'
-        run: terraform apply -auto-approve tfplan
-        working-directory: terraform
-
-      # # Retrieve Terraform Outputs
-      # - name: Retrieve Terraform Outputs
-      #   id: terraform_output
-      #   run: |
-      #     PUBLIC_IP=$(az network public-ip show \
-      #       --resource-group tf-linux-rg \
-      #       --name tf-linux-vm-public-ip \
-      #       --query ipAddress -o tsv)
-      #     echo "public_ip=${PUBLIC_IP}" >> $GITHUB_ENV  
+      # # Initialize Terraform
+      # - name: Initialize Terraform
+      #   run: terraform init
       #   working-directory: terraform
 
-      # Decode the private key and save it to a file
-      # - name: Decode and save SSH private key
-      #   run: |
-      #     echo "${{ secrets.AZURE_PRIVATE_KEY }}" >> private_key.pem
-      #     chmod 600 private_key.pem
+      #  # Terraform Plan
+      # - name: Terraform Plan
+      #   run: terraform plan -out=tfplan
+      #   working-directory: terraform
 
-      # # Test SSH Connection (Add verbosity for troubleshooting)
-      # - name: Test SSH Connection
-      #   run: |
-      #     chmod 600 newprivatekeypair.pem
-      #     echo "Testing SSH connection to VM..."
-      #     pwd
-      #     ls -l 
-      #     ssh -i newprivatekeypair.pem -o StrictHostKeyChecking=no -vvv azureuser@40.85.153.118 echo "SSH connection successful"
-      #   shell: bash
+      # # Terraform Apply
+      # - name: Terraform Apply
+      #   if: github.ref == 'refs/heads/main'
+      #   run: terraform apply -auto-approve tfplan
+      #   working-directory: terraform
 
-      # Install Ansible
-      # - name: Install Ansible
-      #   run: |
-      #     sudo apt-get install -y ansible
-      #     sudo python3 -m pip install --upgrade ansible
-      #     pip show ansible
-      #     sudo apt-get update
-      #     sudo apt-get install zlib1g
+      #   # upto this stage 1------------------------------------
 
-      # Configure Ansible Inventory
-      # - name: Configure Ansible Inventory
-      #   run: |
-      #     echo "Configuring Ansible inventory file..."
-      #     echo "[azure_vm]" > inventory
-      #     echo "40.85.153.118 ansible_user=azureuser ansible_ssh_private_key_file=private_key.pem ansible_ssh_common_args='-o StrictHostKeyChecking=no'" >> inventory
-          
-      #     if [[ ! -f "inventory" ]]; then
-      #       echo "Error: Ansible inventory file was not created."
-      #       exit 1
-      #     fi
+      # from here the 2nd stage 
 
-      #     echo "Ansible inventory file configured."
+      #installing dependent libraries
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
 
-      # Run Ansible Playbook
-      # - name: Run Ansible Playbook
-      #   run: |
-      #     chmod 600 newprivatekeypair.pem
-      #     python3 --version
-      #     echo "Running Ansible playbook..."
-      #     ansible-playbook -i inventory.ini setup.yml -u azureuser@40.85.153.118 --private-key=newprivatekeypair.pem --limit all -vvv
-      # # ansible all -m command -a "echo hello" -i inventory.ini -vvv
-      # # - name: Ensure Python 3 is Installed on VM
-      # # #   uses: docker://cytopia/ansible:latest
-      # # #   with:
-      # # #     args: >
-      # # #         ansible-playbook -i inventory -c paramiko -e "ansible_user=azureuser"
-      # # #         -e "ansible_password=${{ secrets.AZURE_VM_PASSWORD }}" 
-      # # #         -e "ansible_ssh_common_args='-o StrictHostKeyChecking=no'"
-      # # #         -e "ansible_python_interpreter=/usr/bin/python3"
-      # # #         - <<'EOF'
-      # # #         ---
-      # # #         - name: Ensure Python 3 is installed
-      # # #           hosts: azure_vm
-      # # #           gather_facts: false
-      # # #           tasks:
-      # # #             - name: Install Python 3 on the VM using raw command
-      # # #               raw: |
-      # # #                 sudo apt-get update -y
-      # # #                 sudo apt-get install -y python3 python3-apt
-      # # #         EOF
+        
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install ansible==6.3.0  # Using a specific older version for better compatibility
+          sudo apt-get update
+          sudo apt-get install -y openssh-client
+
+# from here to connet vm to install docker to enable the service
+      - name: Setup SSH
+        run: |
+          eval $(ssh-agent -s)
+          chmod 600 network-vm.pem
+          ssh-add network-vm.pem
+          mkdir -p ~/.ssh
+          echo "Host *\n\tStrictHostKeyChecking no\n\tUserKnownHostsFile=/dev/null\n\tServerAliveInterval 60\n\tServerAliveCountMax 3" > ~/.ssh/config
+
     
-      # # - name: Run Ansible Playbook for Deployment
-      # #   uses: docker://cytopia/ansible:latest
-      # #   with:
-      # #     args: |
-      # #       /bin/sh -c "
-      # #       apk update &&
-      # #       apk add --no-cache sshpass &&
-      # #       ansible-playbook -i inventory ansible-playbook.yml
-      # #       "
+      - name: Install Python on Remote
+        run: |
+          ssh -i network-vm.pem azureuser@13.64.214.173 '
+          if ! command -v python3 &> /dev/null; then
+              sudo apt-get update
+              sudo apt-get install -y python3 python3-pip
+          fi'
 
+      - name: Run Ansible
+        env:
+          ANSIBLE_HOST_KEY_CHECKING: "False"
+          ANSIBLE_SSH_RETRIES: "5"
+          ANSIBLE_RETRY_FILES_ENABLED: "True"
+        run: |
+          ansible-playbook -i inventory.ini playbook.yml -vvv
 
+     
+
+    
